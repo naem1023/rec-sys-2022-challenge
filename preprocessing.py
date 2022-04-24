@@ -15,7 +15,7 @@ parser.add_argument('--output_dir', type=str)
 parser.add_argument('--threshold', type=float)
 parser.add_argument('--min_items_per_user', type=int, default=5)
 parser.add_argument('--min_users_per_item', type=int, default=0)
-parser.add_argument('--heldout_users', type=int,default=3000)
+parser.add_argument('--heldout_users', type=int,default= 3000)
 
 args = parser.parse_args()
 
@@ -28,7 +28,7 @@ n_heldout_users = args.heldout_users
 
 raw_data = pd.read_csv(dataset, header=0)
 raw_data.head()
-
+leaderboarddf=pd.read_csv('/opt/ml/RecsysChal/data/test_leaderboard_sessions.csv')
 
 def get_count(tp, id):
     playcount_groupbyid = tp[[id]].groupby(id, as_index=False)
@@ -36,45 +36,41 @@ def get_count(tp, id):
     return count
 
 
-def filter_triplets(tp, min_uc=min_uc, min_sc=min_sc): 
-    if min_sc > 0:
-        itemcount = get_count(tp, 'item')
-        tp = tp[tp['item'].isin(itemcount.index[itemcount >= min_sc])]
-    
-    if min_uc > 0:
-        usercount = get_count(tp, 'user')
-        tp = tp[tp['user'].isin(usercount.index[usercount >= min_uc])]
-    
-    usercount, itemcount = get_count(tp, 'user'), get_count(tp, 'item') 
-    return tp, usercount, itemcount
+usercount, itemcount = get_count(raw_data, 'session_id'), get_count(raw_data, 'item_id') 
+raw_data, user_activity, item_popularity = raw_data, usercount, itemcount
 
-
-raw_data, user_activity, item_popularity = filter_triplets(raw_data)
+leaderboardusercount,leaderboarditemcount=get_count(leaderboarddf,'session_id'), get_count(raw_data, 'item_id') 
 
 sparsity = 1. * raw_data.shape[0] / (user_activity.shape[0] * item_popularity.shape[0])
 
-print("After filtering, there are %d watching events from %d users and %d movies (sparsity: %.3f%%)" % 
+print("There are %d watching events from %d users and %d movies (sparsity: %.3f%%)" % 
       (raw_data.shape[0], user_activity.shape[0], item_popularity.shape[0], sparsity * 100))
 
 unique_uid = user_activity.index
+unique_uid_leaderboard = leaderboardusercount.index
 
 np.random.seed(98765)
 idx_perm = np.random.permutation(unique_uid.size)
+leaderboardidx_perm = np.random.permutation(unique_uid_leaderboard.size)
 unique_uid = unique_uid[idx_perm]
+unique_uid_leaderboard=unique_uid_leaderboard[leaderboardidx_perm]
 
+n_testusers = unique_uid_leaderboard.size
 n_users = unique_uid.size
 
-tr_users = unique_uid.copy()
+# tr_users = unique_uid[:(n_users - n_heldout_users * 2)]
+# vd_users = unique_uid[(n_users - n_heldout_users * 2): (n_users - n_heldout_users)]
+# te_users = unique_uid[(n_users - n_heldout_users):]
+tr_users = unique_uid[:(n_users - n_heldout_users * 2)]
 vd_users = unique_uid[(n_users - n_heldout_users * 2): (n_users - n_heldout_users)]
-te_users = unique_uid.copy()
+te_users = unique_uid_leaderboard.copy()
 
-train_plays = raw_data.loc[raw_data['user'].isin(tr_users)]
+train_plays = raw_data.loc[raw_data['session_id'].isin(tr_users)]
 
-unique_sid = pd.unique(train_plays['item'])
+unique_sid = pd.unique(train_plays['item_id'])
 
 show2id = dict((sid, i) for (i, sid) in enumerate(unique_sid))
 profile2id = dict((pid, i) for (i, pid) in enumerate(unique_uid))
-
 
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
@@ -89,7 +85,7 @@ with open(os.path.join(output_dir, 'unique_uid.txt'), 'w') as f:
 
 
 def split_train_test_proportion(data, test_prop=0.2):
-    data_grouped_by_user = data.groupby('user')
+    data_grouped_by_user = data.groupby('session_id')
     tr_list, te_list = list(), list()
 
     np.random.seed(98765)
@@ -107,7 +103,7 @@ def split_train_test_proportion(data, test_prop=0.2):
             tr_list.append(group)
 
         if i % 1000 == 0:
-            print("%d users sampled" % i)
+            print("%d sessions sampled" % i)
             sys.stdout.flush()
 
     data_tr = pd.concat(tr_list)
@@ -116,19 +112,19 @@ def split_train_test_proportion(data, test_prop=0.2):
     return data_tr, data_te
 
 
-vad_plays = raw_data.loc[raw_data['user'].isin(vd_users)]
-vad_plays = vad_plays.loc[vad_plays['item'].isin(unique_sid)]
+vad_plays = raw_data.loc[raw_data['session_id'].isin(vd_users)]
+vad_plays = vad_plays.loc[vad_plays['item_id'].isin(unique_sid)]
 
 vad_plays_tr, vad_plays_te = split_train_test_proportion(vad_plays)
 
-test_plays = raw_data.loc[raw_data['user'].isin(te_users)]
-test_plays = test_plays.loc[test_plays['item'].isin(unique_sid)]
+test_plays = raw_data.loc[raw_data['session_id'].isin(te_users)]
+test_plays = test_plays.loc[test_plays['item_id'].isin(unique_sid)]
 
 test_plays_tr, test_plays_te = split_train_test_proportion(test_plays)
 
 def numerize(tp):
-    uid = list(map(lambda x: profile2id[x], tp['user']))
-    sid = list(map(lambda x: show2id[x], tp['item']))
+    uid = list(map(lambda x: profile2id[x], tp['session_id']))
+    sid = list(map(lambda x: show2id[x], tp['item_id']))
     return pd.DataFrame(data={'uid': uid, 'sid': sid}, columns=['uid', 'sid'])
 
 

@@ -2,7 +2,7 @@ import numpy as np
 
 import torch
 from torch import optim
-
+from tqdm import tqdm
 import random
 from copy import deepcopy
 
@@ -109,9 +109,9 @@ def evaluate(model, data_in, data_out, metrics, samples_perc_per_epoch=1, batch_
     return [x['score'] for x in metrics]
 
 
-
 def run(model, opts, train_data, batch_size, n_epochs, beta, gamma, dropout_rate):
     model.train()
+    total_loss=0
     for epoch in range(n_epochs):
         for batch in generate(batch_size=batch_size, device=device, data_in=train_data, shuffle=True):
             ratings = batch.get_ratings_to_dev()
@@ -120,10 +120,12 @@ def run(model, opts, train_data, batch_size, n_epochs, beta, gamma, dropout_rate
                 optimizer.zero_grad()
                 
             _, loss = model(ratings, beta=beta, gamma=gamma, dropout_rate=dropout_rate)
+            total_loss+=loss
             loss.backward()
             
             for optimizer in opts:
                 optimizer.step()
+    return total_loss
 
 
 model_kwargs = {
@@ -131,9 +133,9 @@ model_kwargs = {
     'latent_dim': args.latent_dim,
     'input_dim': train_data.shape[1]
 }
-metrics = [{'metric': ndcg, 'k': 5},{'metric': ndcg, 'k': 10}, {'metric': recall, 'k': 5}, {'metric': recall, 'k': 10}]
+metrics = [{'metric': recall, 'k': 100}]
 
-best_r10 = -np.inf
+best_ndcg = -np.inf
 train_scores, valid_scores = [], []
 
 model = VAE(**model_kwargs).to(device)
@@ -154,33 +156,38 @@ optimizer_encoder = optim.Adam(encoder_params, lr=args.lr)
 optimizer_decoder = optim.Adam(decoder_params, lr=args.lr)
 
 
-for epoch in range(args.n_epochs):
-    train_scores, valid_scores = [], []
+for epoch in tqdm(range(args.n_epochs),total=args.n_epochs):
+
     if args.not_alternating:
         run(opts=[optimizer_encoder, optimizer_decoder], n_epochs=1, dropout_rate=0.5, **learning_kwargs)
     else:
-        run(opts=[optimizer_encoder], n_epochs=args.n_enc_epochs, dropout_rate=0.5, **learning_kwargs)
+        encloss=run(opts=[optimizer_encoder], n_epochs=args.n_enc_epochs, dropout_rate=0.5, **learning_kwargs)
         model.update_prior()
-        run(opts=[optimizer_decoder], n_epochs=args.n_dec_epochs, dropout_rate=0, **learning_kwargs)
+        decloss=run(opts=[optimizer_decoder], n_epochs=args.n_dec_epochs, dropout_rate=0, **learning_kwargs)
+        print('Encoder Loss: ', encloss.item(),'Decoder Loss: ', decloss.item())
+model_best.load_state_dict(deepcopy(model.state_dict()))
+torch.save(model_best.state_dict(), '/opt/ml/RecsysChal/RecVAE/results/model.pt')
 
-    train_scores=evaluate(model, train_data, train_data, metrics, 0.01)
-
-    valid_scores=evaluate(model, valid_in_data, valid_out_data, metrics, 1)
-
+#     train_scores.append(
+#         evaluate(model, train_data, train_data, metrics, 0.01)[0]
+#     )
+#     valid_scores.append(
+#         evaluate(model, valid_in_data, valid_out_data, metrics, 1)[0]
+#     )
     
-    if valid_scores[-1] > best_r10:
-        best_r10 = valid_scores[-1]
-        model_best.load_state_dict(deepcopy(model.state_dict()))
-        torch.save(model_best,'model{}.pt'.format(epoch))
+#     if valid_scores[-1] > best_ndcg:
+#         best_ndcg = valid_scores[-1]
+#         model_best.load_state_dict(deepcopy(model.state_dict()))
         
-    print(f'epoch {epoch} | valid ndcg@5: {valid_scores[0]:.4f} | valid ndcg@10: {valid_scores[1]:.4f} | valid recall@5: {valid_scores[2]:.4f} | valid recall@10: {valid_scores[3]:.4f} | ' +
-          f'best valid recall@10: {best_r10:.4f} | train ndcg@5: {train_scores[0]:.4f} | train ndcg@10: {train_scores[1]:.4f} | train recall@5: {train_scores[2]:.4f} | train recall@10: {train_scores[3]:.4f} | ')
+
+#     print(f'epoch {epoch} | valid recall@100: {valid_scores[-1]:.4f} | ' +
+#           f'best valid: {best_ndcg:.4f} | train recall@100: {train_scores[-1]:.4f}')
 
 
     
-test_metrics = [{'metric': ndcg, 'k': 5},{'metric': ndcg, 'k': 10}, {'metric': recall, 'k': 5}, {'metric': recall, 'k': 10}]
+# test_metrics = [{'metric': recall, 'k': 100}, {'metric': recall, 'k': 50}, {'metric': recall, 'k': 20}]
 
-final_scores = evaluate(model_best, test_in_data, test_out_data, test_metrics)
+# final_scores = evaluate(model_best, test_in_data, test_out_data, test_metrics)
 
-for metric, score in zip(test_metrics, final_scores):
-    print(f"{metric['metric'].__name__}@{metric['k']}:\t{score:.4f}")
+# for metric, score in zip(test_metrics, final_scores):
+#     print(f"{metric['metric'].__name__}@{metric['k']}:\t{score:.4f}")
