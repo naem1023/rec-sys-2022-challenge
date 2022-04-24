@@ -78,9 +78,13 @@ class Batch:
         ).to(self._device)
 
 
-
-
-model=torch.load(args.model)
+model_kwargs = {
+    'hidden_dim': args.hidden_dim,
+    'latent_dim': args.latent_dim,
+    'input_dim': train_data.shape[1]
+}
+model = VAE(**model_kwargs).to(device)
+model.load_state_dict(torch.load(args.model))
 model.eval()
 total_batch=[]
 first=True
@@ -92,7 +96,7 @@ for batch in generate(batch_size=500,
                               samples_perc_per_epoch=1
                              ):
         ratings_in = batch.get_ratings_to_dev()
-        ratings_pred = model(ratings_in, calculate_loss=False).cpu().detach().numpy()
+        ratings_pred = model(ratings_in,ratings_in, calculate_loss=False).cpu().detach().numpy()
         if first:
             total_batch=ratings_pred
             first = False
@@ -102,10 +106,11 @@ for batch in generate(batch_size=500,
 print(total_batch.shape)
 
 temp=pd.DataFrame(total_batch)
+temp.to_csv('total_prediction.csv',sep=',')
 
-unique_sid=pd.read_csv('/home/hojin/MultiVAE/data/train/pro_sg/unique_sid.txt',sep=" ",header=None)
+unique_sid=pd.read_csv('/opt/ml/RecsysChal/data/Preprocessed/unique_sid.txt',sep=" ",header=None)
 
-unique_uid=pd.read_csv('/home/hojin/MultiVAE/data/train/pro_sg/unique_uid.txt',sep=" ",header=None)
+unique_uid=pd.read_csv('/opt/ml/RecsysChal/data/Preprocessed/unique_uid.txt',sep=" ",header=None)
 
 id2show = dict((i, sid) for (i, sid) in enumerate(unique_sid.squeeze()))
 id2profile = dict((i, pid) for (i, pid) in enumerate(unique_uid.squeeze()))
@@ -118,23 +123,24 @@ origin_uid=[id2profile[x] for x in row]
 
 temp.columns=origin_mid
 temp.index=origin_uid
-raw_data=pd.read_csv('/home/hojin/RECVAE/data/train/train_ratings.csv')
+raw_data=pd.read_csv('/opt/ml/RecsysChal/data/train_sessions.csv')
 
-watchedm=raw_data.groupby('user')['item'].apply(list)
+watchedm=raw_data.groupby('session_id')['item_id'].apply(list)
 
 
 from tqdm import tqdm
 sumbission=dict()
-sumbission={'user': [],'item': []}
+sumbission={'session_id': [],'item_id': [],'rank':[]}
 sumbission
 
-for row in tqdm(temp.iterrows(),total=31360):
+for row in tqdm(temp.iterrows(),total=raw_data['session_id'].nunique()):
     userid=row[0]
     movies=row[1]
     watchedmovies=watchedm[userid]
 
     for _ in range(10):
-        sumbission['user'].append(userid)
+        sumbission['session_id'].append(userid)
+        sumbission['rank'].append(_)
     
     itemp=[]
     for movie in reversed(list(movies.sort_values().index)):
@@ -144,8 +150,8 @@ for row in tqdm(temp.iterrows(),total=31360):
             if movie not in watchedmovies:
                 itemp.append(movie)
     
-    sumbission['item']+=itemp
+    sumbission['item_id']+=itemp
 
 sumbission=pd.DataFrame(sumbission)
-sumbission.sort_values('user')
+sumbission.sort_values('session_id')
 sumbission.to_csv('sumbission.csv')
